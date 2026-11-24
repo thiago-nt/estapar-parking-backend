@@ -1,0 +1,43 @@
+server:
+  port: 3003
+
+spring:
+  application:
+    name: estapar-parking-backend
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3307/estapar_parking?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Sao_Paulo}
+    username: ${DB_USERNAME:estapar}
+    password: ${DB_PASSWORD:estapar}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      minimum-idle: 2
+      maximum-pool-size: 10
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    validate-migration-naming: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+  info:
+    env:
+      enabled: true
+
+info:
+  application:
+    name: ${spring.application.name}
+    description: Backend para gerenciamento de estacionamentos
+    version: '@project.version@'
