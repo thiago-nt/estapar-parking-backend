@@ -36,6 +36,9 @@ management:
   endpoint:
     health:
       show-details: never
+      group:
+        readiness:
+          include: readinessState,garageInitialization
   info:
     env:
       enabled: true
@@ -45,3 +48,13 @@ info:
     name: ${spring.application.name}
     description: Backend para gerenciamento de estacionamentos
     version: '@project.version@'
+
+garage:
+  simulator:
+    enabled: ${GARAGE_SIMULATOR_ENABLED:true}
+    base-url: ${GARAGE_SIMULATOR_URL:http://localhost:3000}
+    connection-timeout: ${GARAGE_SIMULATOR_CONNECTION_TIMEOUT:2s}
+    read-timeout: ${GARAGE_SIMULATOR_READ_TIMEOUT:5s}
+    retry:
+      max-attempts: ${GARAGE_SIMULATOR_RETRY_MAX_ATTEMPTS:3}
+      backoff: ${GARAGE_SIMULATOR_RETRY_BACKOFF:1s}

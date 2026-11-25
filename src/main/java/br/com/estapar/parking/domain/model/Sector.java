@@ -55,4 +55,13 @@ public class Sector extends AuditableEntity {
     public Integer getMaxCapacity() {
         return maxCapacity;
     }
+
+    public boolean hasConfiguration(BigDecimal basePrice, int maxCapacity) {
+        return this.basePrice.compareTo(basePrice) == 0 && this.maxCapacity == maxCapacity;
+    }
+
+    public void updateConfiguration(BigDecimal basePrice, int maxCapacity) {
+        this.basePrice = Objects.requireNonNull(basePrice, "basePrice must not be null");
+        this.maxCapacity = maxCapacity;
+    }
 }

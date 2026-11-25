@@ -72,4 +72,20 @@ public class ParkingSpot extends AuditableEntity {
     public ParkingSpotStatus getStatus() {
         return status;
     }
+
+    public boolean hasMetadata(Sector sector, BigDecimal latitude, BigDecimal longitude) {
+        return Objects.equals(this.sector.getId(), sector.getId())
+                && this.latitude.compareTo(latitude) == 0
+                && this.longitude.compareTo(longitude) == 0;
+    }
+
+    public boolean isOccupied() {
+        return status == ParkingSpotStatus.OCCUPIED;
+    }
+
+    public void updateMetadata(Sector sector, BigDecimal latitude, BigDecimal longitude) {
+        this.sector = Objects.requireNonNull(sector, "sector must not be null");
+        this.latitude = Objects.requireNonNull(latitude, "latitude must not be null");
+        this.longitude = Objects.requireNonNull(longitude, "longitude must not be null");
+    }
 }
