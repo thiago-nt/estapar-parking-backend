@@ -77,6 +77,19 @@ O retorno esperado quando a aplicação e o banco estiverem disponíveis é:
 {"groups":["liveness","readiness"],"status":"UP"}
 ```
 
-## Escopo da Etapa 1
+## Escopo implementado
 
-Esta etapa entrega a estrutura de pacotes, configuração da aplicação, integração inicial com MySQL e Flyway, observabilidade básica e infraestrutura local. Ela não inclui regras de negócio, endpoints de domínio, entidades, tabelas ou migrations SQL.
+O projeto inclui o bootstrap da aplicação e o modelo inicial de persistência. Regras de negócio e endpoints de garagem, webhook, faturamento e receita permanecem fora do escopo.
+
+## Modelo de persistência
+
+O esquema possui setores, vagas, sessões de estacionamento e uma linha de controle global. Horários são representados por `Instant` na aplicação e persistidos em UTC como `DATETIME(6)`.
+
+Uma sessão `ENTERED` pode existir sem vaga ou setor. A associação física ocorre posteriormente no evento `PARKED`; a capacidade declarada de um setor é definida por `max_capacity` e não pela quantidade de vagas cadastradas.
+
+Para impedir concorrência indevida, `parking_session` utiliza duas colunas virtuais geradas pelo MySQL:
+
+- `active_license_plate` contém a placa apenas para sessões `ENTERED` ou `PARKED` e possui índice único;
+- `active_parking_spot_id` contém a vaga apenas para sessões `PARKED` e também possui índice único.
+
+Sessões `EXITED` produzem `NULL` nessas colunas. Como índices únicos do MySQL permitem múltiplos valores `NULL`, o histórico é preservado sem impedir novas sessões para a mesma placa ou vaga.

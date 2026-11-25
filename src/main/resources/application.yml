@@ -5,7 +5,7 @@ spring:
   application:
     name: estapar-parking-backend
   datasource:
-    url: ${DB_URL:jdbc:mysql://localhost:3307/estapar_parking?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Sao_Paulo}
+    url: ${DB_URL:jdbc:mysql://localhost:3307/estapar_parking?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
     username: ${DB_USERNAME:estapar}
     password: ${DB_PASSWORD:estapar}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -23,6 +23,10 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
 
 management:
   endpoints:
