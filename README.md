@@ -169,6 +169,7 @@ Os timestamps usam ISO-8601 UTC e são convertidos para `Instant`. As coordenada
 
 - `200`: evento validado e efetivamente processado;
 - `400`: JSON malformado, tipo desconhecido ou campo inválido;
+- `409`: garagem cheia ou placa com outra sessão ativa conflitante;
 - `415`: `Content-Type` diferente de `application/json`;
 - `503`: configuração da garagem ainda não pronta ou processador indisponível;
 - `500`: falha interna inesperada.
@@ -188,17 +189,35 @@ Invoke-WebRequest `
   -Method Post `
   -Uri http://localhost:3003/webhook `
   -ContentType "application/json" `
-  -Body $body `
-  -SkipHttpErrorCheck
+  -Body $body
 ```
+
+### Processamento transacional de ENTRY
+
+O evento `ENTRY` possui processamento real. Depois de confirmar que a configuração está pronta, a aplicação executa em uma única transação:
+
+1. lock pessimista de escrita na linha `garage_state` de ID `1`;
+2. busca da sessão ativa para a placa;
+3. verificação de idempotência por placa e `entry_time`;
+4. soma da capacidade declarada de todos os setores;
+5. contagem de sessões `ENTERED` e `PARKED`;
+6. criação de uma sessão `ENTERED`, sem setor ou vaga associados.
+
+A capacidade global é `SUM(sector.max_capacity)`, independentemente da quantidade de registros em `parking_spot`. Veículos `ENTERED` já consomem capacidade mesmo antes de estacionarem. Quando a ocupação alcança a capacidade, novas entradas recebem `409` e nenhuma sessão ou vaga é alterada.
+
+Uma reentrega com a mesma placa e o mesmo `entry_time` retorna `200` sem criar outra sessão, inclusive se a garagem ficou cheia depois da primeira entrega. A mesma placa com outro horário enquanto possui sessão ativa recebe `409`. Depois que a sessão anterior estiver `EXITED`, uma nova entrada é permitida.
+
+O lock `PESSIMISTIC_WRITE` serializa a decisão de capacidade entre requisições e também com a sincronização da garagem. A restrição `uk_parking_session_active_license_plate` permanece como proteção adicional no MySQL.
+
+Como o contrato não possui `event_id`, não é possível diferenciar perfeitamente uma reentrega antiga de uma nova entrada quando a sessão anterior já foi encerrada.
 
 ### Limitação temporária
 
-Nesta etapa, o roteamento e a validação estão implementados, mas as operações de banco para `ENTRY`, `PARKED` e `EXIT` ainda não existem. A implementação provisória retorna `503` para eventos válidos; ela não cria sessões nem altera vagas. O caminho `200` é exercitado apenas em testes com um processador mockado.
+`PARKED` e `EXIT` ainda não possuem operações de negócio. Eventos válidos desses tipos retornam `503` e não alteram sessões ou vagas.
 
 A aplicação deve usar `GARAGE_SIMULATOR_URL=http://localhost:3001` para consultar a garagem. A imagem do simulador atualmente tenta entregar o webhook em `localhost:3003` a partir do próprio container e pode não respeitar a variável externa configurada. Em Docker Desktop com rede bridge, isso não aponta automaticamente para o host; consulte os logs do container e não trate falhas de entrega como processamento bem-sucedido.
 
-O próximo passo é substituir o processador provisório pelas regras transacionais de entrada, estacionamento e saída do Dia 2.
+O próximo passo é implementar a associação transacional de vaga e setor no evento `PARKED`.
 
 ## Modelo de persistência
 

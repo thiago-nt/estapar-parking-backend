@@ -1,5 +1,7 @@
 package br.com.estapar.parking.api.error;
 
+import br.com.estapar.parking.application.ActiveParkingSessionConflictException;
+import br.com.estapar.parking.application.GarageFullException;
 import br.com.estapar.parking.application.ParkingEventProcessingUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +38,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleUnavailable(ParkingEventProcessingUnavailableException exception) {
         LOGGER.warn("Webhook event processing unavailable reason={}", exception.getMessage());
         return response(HttpStatus.SERVICE_UNAVAILABLE, "PROCESSING_UNAVAILABLE", exception.getMessage());
+    }
+
+    @ExceptionHandler({GarageFullException.class, ActiveParkingSessionConflictException.class})
+    public ResponseEntity<ApiErrorResponse> handleConflict(RuntimeException exception) {
+        LOGGER.warn("Webhook event processing conflict reason={}", exception.getMessage());
+        return response(HttpStatus.CONFLICT, "PARKING_CONFLICT", exception.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

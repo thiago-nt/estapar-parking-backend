@@ -13,4 +13,6 @@ public interface ParkingSessionRepository extends JpaRepository<ParkingSession, 
             String licensePlate,
             Collection<ParkingSessionStatus> statuses
     );
+
+    long countByStatusIn(Collection<ParkingSessionStatus> statuses);
 }

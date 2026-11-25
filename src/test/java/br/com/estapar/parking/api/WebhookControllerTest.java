@@ -3,7 +3,9 @@ package br.com.estapar.parking.api;
 import br.com.estapar.parking.api.dto.EntryEventRequest;
 import br.com.estapar.parking.api.dto.ExitEventRequest;
 import br.com.estapar.parking.api.dto.ParkedEventRequest;
+import br.com.estapar.parking.application.ActiveParkingSessionConflictException;
 import br.com.estapar.parking.application.GarageInitializationState;
+import br.com.estapar.parking.application.GarageFullException;
 import br.com.estapar.parking.application.ParkingEventProcessor;
 import br.com.estapar.parking.application.UnavailableParkingEventProcessor;
 import br.com.estapar.parking.application.WebhookEventDispatcher;
@@ -235,6 +237,32 @@ class WebhookControllerTest {
                 .andExpect(jsonPath("$.message").value(
                         "An unexpected error occurred while processing the event"
                 ));
+    }
+
+    @Test
+    void shouldReturnConflictWhenGarageIsFull() throws Exception {
+        doThrow(new GarageFullException("Garage has no available entry capacity"))
+                .when(processor)
+                .processEntry(any(EntryEventRequest.class));
+
+        mockMvc.perform(post("/webhook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validEntry()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PARKING_CONFLICT"));
+    }
+
+    @Test
+    void shouldReturnConflictForDifferentEntryTimeOnActiveSession() throws Exception {
+        doThrow(new ActiveParkingSessionConflictException("Active session conflict"))
+                .when(processor)
+                .processEntry(any(EntryEventRequest.class));
+
+        mockMvc.perform(post("/webhook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validEntry()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PARKING_CONFLICT"));
     }
 
     private MockMvc mockMvc(ParkingEventProcessor eventProcessor, GarageInitializationState state) {
