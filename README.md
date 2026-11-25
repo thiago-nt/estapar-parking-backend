@@ -57,10 +57,10 @@ docker compose down
 
 ## Executar a aplicação no Windows
 
-Com o MySQL e o simulador saudáveis:
+Com o MySQL e o simulador saudáveis neste ambiente local, no qual a porta `3000` pertence ao Grafana:
 
 ```powershell
-$env:GARAGE_SIMULATOR_URL = "http://localhost:3000"
+$env:GARAGE_SIMULATOR_URL = "http://localhost:3001"
 .\mvnw.cmd spring-boot:run
 ```
 
@@ -128,9 +128,77 @@ docker exec estapar-parking-mysql mysql -uestapar -pestapar estapar_parking -e `
   "SELECT s.code, COUNT(p.id) spots FROM sector s LEFT JOIN parking_spot p ON p.sector_id = s.id GROUP BY s.id, s.code; SELECT latitude, longitude, COUNT(*) total FROM parking_spot GROUP BY latitude, longitude HAVING total > 1;"
 ```
 
-## Limites atuais
+## Webhook de eventos
 
-O endpoint `/webhook` e o processamento de eventos de veículos serão implementados na Etapa 4. O simulador pode tentar enviar eventos depois da primeira consulta a `/garage`; respostas HTTP 404 nesse fluxo são esperadas nesta etapa e não invalidam a sincronização inicial.
+O endpoint `POST http://localhost:3003/webhook` recebe exclusivamente `Content-Type: application/json`. O campo `event_type` seleciona um dos três contratos.
+
+ENTRY:
+
+```json
+{
+  "license_plate": "ZUL0001",
+  "entry_time": "2025-01-01T12:00:00.000Z",
+  "event_type": "ENTRY"
+}
+```
+
+PARKED:
+
+```json
+{
+  "license_plate": "ZUL0001",
+  "lat": -23.561684,
+  "lng": -46.655981,
+  "event_type": "PARKED"
+}
+```
+
+EXIT:
+
+```json
+{
+  "license_plate": "ZUL0001",
+  "exit_time": "2025-01-01T13:30:00.000Z",
+  "event_type": "EXIT"
+}
+```
+
+Os timestamps usam ISO-8601 UTC e são convertidos para `Instant`. As coordenadas usam `BigDecimal`, preservando a precisão recebida.
+
+### Códigos HTTP
+
+- `200`: evento validado e efetivamente processado;
+- `400`: JSON malformado, tipo desconhecido ou campo inválido;
+- `415`: `Content-Type` diferente de `application/json`;
+- `503`: configuração da garagem ainda não pronta ou processador indisponível;
+- `500`: falha interna inesperada.
+
+As respostas de erro possuem os campos JSON `code` e `message`, sem stack trace.
+
+### Testar no PowerShell
+
+```powershell
+$body = @{
+  license_plate = "ZUL0001"
+  entry_time = "2025-01-01T12:00:00.000Z"
+  event_type = "ENTRY"
+} | ConvertTo-Json
+
+Invoke-WebRequest `
+  -Method Post `
+  -Uri http://localhost:3003/webhook `
+  -ContentType "application/json" `
+  -Body $body `
+  -SkipHttpErrorCheck
+```
+
+### Limitação temporária
+
+Nesta etapa, o roteamento e a validação estão implementados, mas as operações de banco para `ENTRY`, `PARKED` e `EXIT` ainda não existem. A implementação provisória retorna `503` para eventos válidos; ela não cria sessões nem altera vagas. O caminho `200` é exercitado apenas em testes com um processador mockado.
+
+A aplicação deve usar `GARAGE_SIMULATOR_URL=http://localhost:3001` para consultar a garagem. A imagem do simulador atualmente tenta entregar o webhook em `localhost:3003` a partir do próprio container e pode não respeitar a variável externa configurada. Em Docker Desktop com rede bridge, isso não aponta automaticamente para o host; consulte os logs do container e não trate falhas de entrega como processamento bem-sucedido.
+
+O próximo passo é substituir o processador provisório pelas regras transacionais de entrada, estacionamento e saída do Dia 2.
 
 ## Modelo de persistência
 
