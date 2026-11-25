@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -17,11 +18,13 @@ public record ParkedEventRequest(
         @NotNull
         @DecimalMin("-90")
         @DecimalMax("90")
+        @Digits(integer = 3, fraction = 7)
         BigDecimal latitude,
         @JsonProperty("lng")
         @NotNull
         @DecimalMin("-180")
         @DecimalMax("180")
+        @Digits(integer = 3, fraction = 7)
         BigDecimal longitude,
         @JsonProperty("event_type") @NotNull WebhookEventType eventType
 ) implements WebhookEventRequest {

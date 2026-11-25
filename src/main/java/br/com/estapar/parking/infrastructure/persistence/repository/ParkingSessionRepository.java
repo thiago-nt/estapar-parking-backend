@@ -15,4 +15,6 @@ public interface ParkingSessionRepository extends JpaRepository<ParkingSession, 
     );
 
     long countByStatusIn(Collection<ParkingSessionStatus> statuses);
+
+    long countBySectorIdAndStatus(Long sectorId, ParkingSessionStatus status);
 }

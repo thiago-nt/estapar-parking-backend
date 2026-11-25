@@ -12,9 +12,14 @@ public class DefaultParkingEventProcessor implements ParkingEventProcessor {
             "Parking event processing is not available for this event type yet";
 
     private final ParkingEntryService parkingEntryService;
+    private final ParkingSpotAssignmentService parkingSpotAssignmentService;
 
-    public DefaultParkingEventProcessor(ParkingEntryService parkingEntryService) {
+    public DefaultParkingEventProcessor(
+            ParkingEntryService parkingEntryService,
+            ParkingSpotAssignmentService parkingSpotAssignmentService
+    ) {
         this.parkingEntryService = parkingEntryService;
+        this.parkingSpotAssignmentService = parkingSpotAssignmentService;
     }
 
     @Override
@@ -24,7 +29,7 @@ public class DefaultParkingEventProcessor implements ParkingEventProcessor {
 
     @Override
     public void processParked(ParkedEventRequest event) {
-        throw unavailable();
+        parkingSpotAssignmentService.processParked(event);
     }
 
     @Override

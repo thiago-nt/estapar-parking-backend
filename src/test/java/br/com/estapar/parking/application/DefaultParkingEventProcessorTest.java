@@ -16,7 +16,9 @@ import static org.mockito.Mockito.verify;
 class DefaultParkingEventProcessorTest {
 
     private final ParkingEntryService entryService = mock(ParkingEntryService.class);
-    private final DefaultParkingEventProcessor processor = new DefaultParkingEventProcessor(entryService);
+    private final ParkingSpotAssignmentService spotAssignmentService = mock(ParkingSpotAssignmentService.class);
+    private final DefaultParkingEventProcessor processor =
+            new DefaultParkingEventProcessor(entryService, spotAssignmentService);
 
     @Test
     void shouldDelegateEntryToRealEntryService() {
@@ -32,7 +34,7 @@ class DefaultParkingEventProcessorTest {
     }
 
     @Test
-    void shouldKeepParkedProcessingUnavailable() {
+    void shouldDelegateParkedToRealAssignmentService() {
         ParkedEventRequest event = new ParkedEventRequest(
                 "ZUL0001",
                 BigDecimal.ZERO,
@@ -40,7 +42,9 @@ class DefaultParkingEventProcessorTest {
                 WebhookEventType.PARKED
         );
 
-        assertThrows(ParkingEventProcessingUnavailableException.class, () -> processor.processParked(event));
+        processor.processParked(event);
+
+        verify(spotAssignmentService).processParked(event);
     }
 
     @Test

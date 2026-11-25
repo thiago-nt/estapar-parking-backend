@@ -118,4 +118,21 @@ public class ParkingSession extends AuditableEntity {
     public BigDecimal getAmount() {
         return amount;
     }
+
+    public boolean isParkedAt(ParkingSpot parkingSpot) {
+        return status == ParkingSessionStatus.PARKED
+                && this.parkingSpot != null
+                && Objects.equals(this.parkingSpot.getId(), parkingSpot.getId());
+    }
+
+    public void assignParkingSpot(ParkingSpot parkingSpot, Instant parkedAt) {
+        if (status != ParkingSessionStatus.ENTERED) {
+            throw new IllegalStateException("Only an entered session can be assigned to a parking spot");
+        }
+        this.parkingSpot = Objects.requireNonNull(parkingSpot, "parkingSpot must not be null");
+        this.sector = Objects.requireNonNull(parkingSpot.getSector(), "parkingSpot sector must not be null");
+        this.parkedAt = Objects.requireNonNull(parkedAt, "parkedAt must not be null");
+        this.basePriceAtParking = sector.getBasePrice();
+        this.status = ParkingSessionStatus.PARKED;
+    }
 }

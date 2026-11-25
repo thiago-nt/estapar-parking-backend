@@ -2,7 +2,12 @@ package br.com.estapar.parking.api.error;
 
 import br.com.estapar.parking.application.ActiveParkingSessionConflictException;
 import br.com.estapar.parking.application.GarageFullException;
+import br.com.estapar.parking.application.InvalidParkingSessionStateException;
 import br.com.estapar.parking.application.ParkingEventProcessingUnavailableException;
+import br.com.estapar.parking.application.ParkingSessionNotFoundException;
+import br.com.estapar.parking.application.ParkingSpotNotFoundException;
+import br.com.estapar.parking.application.ParkingSpotOccupiedException;
+import br.com.estapar.parking.application.SectorCapacityExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -40,10 +45,23 @@ public class GlobalExceptionHandler {
         return response(HttpStatus.SERVICE_UNAVAILABLE, "PROCESSING_UNAVAILABLE", exception.getMessage());
     }
 
-    @ExceptionHandler({GarageFullException.class, ActiveParkingSessionConflictException.class})
+    @ExceptionHandler({
+            GarageFullException.class,
+            ActiveParkingSessionConflictException.class,
+            ParkingSessionNotFoundException.class,
+            ParkingSpotOccupiedException.class,
+            InvalidParkingSessionStateException.class,
+            SectorCapacityExceededException.class
+    })
     public ResponseEntity<ApiErrorResponse> handleConflict(RuntimeException exception) {
         LOGGER.warn("Webhook event processing conflict reason={}", exception.getMessage());
         return response(HttpStatus.CONFLICT, "PARKING_CONFLICT", exception.getMessage());
+    }
+
+    @ExceptionHandler(ParkingSpotNotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleParkingSpotNotFound(ParkingSpotNotFoundException exception) {
+        LOGGER.warn("Parking spot lookup failed reason={}", exception.getMessage());
+        return response(HttpStatus.NOT_FOUND, "PARKING_SPOT_NOT_FOUND", exception.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

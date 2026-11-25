@@ -83,6 +83,13 @@ public class ParkingSpot extends AuditableEntity {
         return status == ParkingSpotStatus.OCCUPIED;
     }
 
+    public void occupy() {
+        if (isOccupied()) {
+            throw new IllegalStateException("Parking spot is already occupied");
+        }
+        status = ParkingSpotStatus.OCCUPIED;
+    }
+
     public void updateMetadata(Sector sector, BigDecimal latitude, BigDecimal longitude) {
         this.sector = Objects.requireNonNull(sector, "sector must not be null");
         this.latitude = Objects.requireNonNull(latitude, "latitude must not be null");

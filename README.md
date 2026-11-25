@@ -97,7 +97,7 @@ Falhas transitórias de conexão e respostas HTTP 5xx recebem um número limitad
 .\mvnw.cmd clean verify
 ```
 
-Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados.
+Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados. A suíte cobre os fluxos `ENTRY` e `PARKED`, reentregas idempotentes, conflitos de estado e vaga, limite de capacidade, rollback e duas transações concorrentes disputando a mesma vaga.
 
 ## Health check
 
@@ -169,7 +169,8 @@ Os timestamps usam ISO-8601 UTC e são convertidos para `Instant`. As coordenada
 
 - `200`: evento validado e efetivamente processado;
 - `400`: JSON malformado, tipo desconhecido ou campo inválido;
-- `409`: garagem cheia ou placa com outra sessão ativa conflitante;
+- `404`: vaga não encontrada para as coordenadas informadas;
+- `409`: garagem ou setor cheio, placa com sessão conflitante ou vaga ocupada;
 - `415`: `Content-Type` diferente de `application/json`;
 - `503`: configuração da garagem ainda não pronta ou processador indisponível;
 - `500`: falha interna inesperada.
@@ -211,13 +212,34 @@ O lock `PESSIMISTIC_WRITE` serializa a decisão de capacidade entre requisiçõe
 
 Como o contrato não possui `event_id`, não é possível diferenciar perfeitamente uma reentrega antiga de uma nova entrada quando a sessão anterior já foi encerrada.
 
+### Processamento transacional de PARKED
+
+O evento `PARKED` realiza a transição `ENTERED -> PARKED` em uma única transação. Depois de confirmar que a configuração está pronta, a aplicação:
+
+1. obtém lock pessimista de escrita na linha `garage_state` de ID `1`;
+2. busca a sessão ativa da placa;
+3. localiza a vaga pela igualdade exata de `lat` e `lng` em `DECIMAL(10,7)`;
+4. valida o estado da sessão, a disponibilidade da vaga e a capacidade do setor;
+5. associa vaga e setor à sessão, registra o instante do processamento em UTC e captura o preço-base vigente;
+6. altera a sessão para `PARKED` e a vaga para `OCCUPIED`.
+
+Uma reentrega para a mesma vaga retorna `200` sem alterar `parked_at` nem o preço capturado. A tentativa de mover uma sessão já estacionada para outra vaga recebe `409`. Placa sem sessão ativa, sessão encerrada, vaga ocupada ou setor sem capacidade também recebem `409`; coordenadas desconhecidas recebem `404`.
+
+A máquina de estados permite apenas `ENTERED -> PARKED` nesta etapa. `PARKED -> PARKED` só é aceito como repetição idempotente na mesma vaga; sessões `EXITED` não são reabertas.
+
+A capacidade do setor considera apenas sessões `PARKED`. O evento não volta a consumir capacidade global, pois o veículo já foi contabilizado no `ENTRY`. O campo `base_price_at_parking` é um snapshot de `sector.base_price`; `amount` e `applied_multiplier` permanecem nulos até o cálculo tarifário no `EXIT`.
+
+Como o simulador não informa o horário do estacionamento, `parked_at` registra, em UTC, o instante em que o evento foi processado. Esse valor é uma estimativa operacional; o tempo de cobrança continuará baseado em `entry_time` e `exit_time`.
+
+O lock global mantém a mesma ordem de sincronização usada pelo `ENTRY` e pela carga da garagem. As restrições únicas do MySQL para placa e vaga ativas permanecem como proteção adicional contra concorrência.
+
 ### Limitação temporária
 
-`PARKED` e `EXIT` ainda não possuem operações de negócio. Eventos válidos desses tipos retornam `503` e não alteram sessões ou vagas.
+`EXIT` ainda não possui operação de negócio. Eventos válidos desse tipo retornam `503` e não alteram sessões ou vagas.
 
 A aplicação deve usar `GARAGE_SIMULATOR_URL=http://localhost:3001` para consultar a garagem. A imagem do simulador atualmente tenta entregar o webhook em `localhost:3003` a partir do próprio container e pode não respeitar a variável externa configurada. Em Docker Desktop com rede bridge, isso não aponta automaticamente para o host; consulte os logs do container e não trate falhas de entrega como processamento bem-sucedido.
 
-O próximo passo é implementar a associação transacional de vaga e setor no evento `PARKED`.
+O próximo passo é implementar o encerramento da sessão e o cálculo tarifário no evento `EXIT`.
 
 ## Modelo de persistência
 

@@ -7,6 +7,8 @@ import br.com.estapar.parking.application.ActiveParkingSessionConflictException;
 import br.com.estapar.parking.application.GarageInitializationState;
 import br.com.estapar.parking.application.GarageFullException;
 import br.com.estapar.parking.application.ParkingEventProcessor;
+import br.com.estapar.parking.application.ParkingSpotNotFoundException;
+import br.com.estapar.parking.application.ParkingSpotOccupiedException;
 import br.com.estapar.parking.application.UnavailableParkingEventProcessor;
 import br.com.estapar.parking.application.WebhookEventDispatcher;
 import br.com.estapar.parking.api.error.GlobalExceptionHandler;
@@ -265,6 +267,32 @@ class WebhookControllerTest {
                 .andExpect(jsonPath("$.code").value("PARKING_CONFLICT"));
     }
 
+    @Test
+    void shouldReturnNotFoundWhenParkingSpotCoordinatesDoNotExist() throws Exception {
+        doThrow(new ParkingSpotNotFoundException("Parking spot was not found"))
+                .when(processor)
+                .processParked(any(ParkedEventRequest.class));
+
+        mockMvc.perform(post("/webhook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validParked()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("PARKING_SPOT_NOT_FOUND"));
+    }
+
+    @Test
+    void shouldReturnConflictWhenParkingSpotIsOccupied() throws Exception {
+        doThrow(new ParkingSpotOccupiedException("Parking spot is already occupied"))
+                .when(processor)
+                .processParked(any(ParkedEventRequest.class));
+
+        mockMvc.perform(post("/webhook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validParked()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PARKING_CONFLICT"));
+    }
+
     private MockMvc mockMvc(ParkingEventProcessor eventProcessor, GarageInitializationState state) {
         WebhookEventDispatcher dispatcher = new WebhookEventDispatcher(eventProcessor, state);
         WebhookController controller = new WebhookController(dispatcher);
@@ -280,6 +308,17 @@ class WebhookControllerTest {
                   "license_plate": "ZUL0001",
                   "entry_time": "2025-01-01T12:00:00Z",
                   "event_type": "ENTRY"
+                }
+                """;
+    }
+
+    private String validParked() {
+        return """
+                {
+                  "license_plate": "ZUL0001",
+                  "lat": -23.561684,
+                  "lng": -46.655981,
+                  "event_type": "PARKED"
                 }
                 """;
     }
