@@ -81,6 +81,24 @@ class WebhookControllerTest {
     }
 
     @Test
+    void shouldAcceptSimulatorEntryTimeWithoutOffsetAsUtc() throws Exception {
+        mockMvc.perform(post("/webhook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "license_plate": "ZUL0001",
+                                  "entry_time": "2025-01-01T12:00:00",
+                                  "event_type": "ENTRY"
+                                }
+                                """))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<EntryEventRequest> captor = ArgumentCaptor.forClass(EntryEventRequest.class);
+        verify(processor).processEntry(captor.capture());
+        assertEquals(Instant.parse("2025-01-01T12:00:00Z"), captor.getValue().entryTime());
+    }
+
+    @Test
     void shouldRejectEntryWithoutLicensePlate() throws Exception {
         mockMvc.perform(post("/webhook")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -151,6 +169,24 @@ class WebhookControllerTest {
                                 {
                                   "license_plate": "ZUL0001",
                                   "exit_time": "2025-01-01T13:30:00.000Z",
+                                  "event_type": "EXIT"
+                                }
+                                """))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ExitEventRequest> captor = ArgumentCaptor.forClass(ExitEventRequest.class);
+        verify(processor).processExit(captor.capture());
+        assertEquals(Instant.parse("2025-01-01T13:30:00Z"), captor.getValue().exitTime());
+    }
+
+    @Test
+    void shouldAcceptSimulatorExitTimeWithoutOffsetAsUtc() throws Exception {
+        mockMvc.perform(post("/webhook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "license_plate": "ZUL0001",
+                                  "exit_time": "2025-01-01T13:30:00",
                                   "event_type": "EXIT"
                                 }
                                 """))

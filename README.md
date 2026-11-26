@@ -56,27 +56,51 @@ O banco `estapar_parking` ficará disponível em `localhost:3307`. Para encerrar
 docker compose down
 ```
 
-## Executar a aplicação no Windows
+## Integração automática com o simulador no Windows
 
-Com o MySQL e o simulador saudáveis neste ambiente local, no qual a porta `3000` pertence ao Grafana:
+A imagem oficial envia webhooks para a URL fixa `http://localhost:3003/webhook` dentro do próprio container. A variável `EXTERNAL_API_URL` não altera esse destino. Por isso, um sidecar Nginx compartilha o namespace de rede do simulador, atende essa URL local e encaminha a requisição para o backend no Windows. O sidecar não publica a porta 3003, não armazena eventos e propaga os status HTTP reais.
+
+O ambiente E2E é descartável e não usa o MySQL de desenvolvimento:
+
+```text
+simulador :3000 ── POST localhost:3003 ──> Nginx sidecar
+                                               │
+                                               └──> host Docker :3003 ──> Spring Boot
+simulador publicado em 127.0.0.1:3001              │
+MySQL E2E publicado em 127.0.0.1:3308 <────────────┘
+```
+
+Com as portas `3001`, `3003` e `3308` livres, execute no Windows PowerShell 5.1:
 
 ```powershell
+.\scripts\start-simulator.ps1
+
+$env:DB_URL = "jdbc:mysql://localhost:3308/estapar_parking_e2e?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+$env:DB_USERNAME = "estapar_e2e"
+$env:DB_PASSWORD = "estapar_e2e"
 $env:GARAGE_SIMULATOR_URL = "http://localhost:3001"
+$env:REVENUE_ZONE_ID = "America/Sao_Paulo"
 .\mvnw.cmd spring-boot:run
 ```
 
-A aplicação ficará disponível em `http://localhost:3003`.
+A ordem é: MySQL isolado, simulador, proxy, Spring Boot, sincronização de setores/vagas e readiness. O `GET /garage` feito após `ApplicationReadyEvent` inicia o simulador; a aplicação só marca a garagem como pronta depois do commit da sincronização. Não há sleep artificial nem resposta antecipada aos webhooks.
 
-Se a porta `3000` estiver ocupada, publique a porta interna `3000` do simulador em outra porta e ajuste a URL. Por exemplo:
+Em outro PowerShell, acompanhe a execução sem produzir manualmente os eventos:
 
 ```powershell
-docker run -d --name estapar-garage-simulator-3001 `
-  -p 3001:3000 `
-  -e EXTERNAL_API_URL=http://host.docker.internal:3003/webhook `
-  cfontes0estapar/garage-sim:1.0.0
-$env:GARAGE_SIMULATOR_URL = "http://localhost:3001"
-.\mvnw.cmd spring-boot:run
+Invoke-RestMethod http://localhost:3003/actuator/health/readiness
+docker logs -f estapar-e2e-webhook-proxy
+docker logs -f estapar-e2e-simulator
+Invoke-RestMethod "http://localhost:3003/revenue?date=2026-11-25&sector=A"
 ```
+
+Use a data de negócio correspondente ao `exit_time`, no fuso `REVENUE_ZONE_ID`. Para encerrar e remover somente os três containers E2E identificados por label:
+
+```powershell
+.\scripts\stop-simulator.ps1
+```
+
+Detalhes da topologia e dos comandos estão em [`docker/simulator/README.md`](docker/simulator/README.md).
 
 ## Sincronização inicial
 
@@ -318,11 +342,15 @@ Os limites são calculados como `[início do dia, início do próximo dia)` em `
 
 Não existe tabela ou cache de receita. Pagamentos e novas APIs permanecem fora do escopo desta etapa.
 
-### Limitação do simulador e próxima etapa
+### Resultado E2E com o simulador real
 
-A aplicação deve usar `GARAGE_SIMULATOR_URL=http://localhost:3001` para consultar a garagem. A imagem do simulador atualmente tenta entregar o webhook em `localhost:3003` a partir do próprio container e pode não respeitar a variável externa configurada. Em Docker Desktop com rede bridge, isso não aponta automaticamente para o host; consulte os logs do container e não trate falhas de entrega como processamento bem-sucedido.
+Em 25 de novembro de 2026, o ambiente isolado sincronizou 2 setores e 30 vagas e recebeu automaticamente `ENTRY`, `PARKED` e `EXIT` da imagem `cfontes0estapar/garage-sim:1.0.0`. A amostra final continha 20 sessões: 7 `EXITED` e 13 `PARKED`; havia 13 vagas `OCCUPIED` e 17 `AVAILABLE`. Todos os webhooks válidos observados receberam `200` do backend e o sidecar propagou tanto um `400` controlado quanto `502` quando o backend foi encerrado.
 
-O próximo passo é ampliar a validação ponta a ponta com o simulador em uma topologia de rede que entregue webhooks ao host de forma confiável.
+As 7 permanências geradas nessa execução ficaram dentro da tolerância gratuita de 30 minutos. Assim, os valores persistidos e as receitas consultadas foram `A = 0.00 BRL` (3 saídas) e `B = 0.00 BRL` (4 saídas), sem recalcular a regra financeira. As consultas de integridade não encontraram placa ativa duplicada, vaga ativa duplicada, ocupação acima da capacidade, sessão estacionada em vaga livre ou saída sem valor.
+
+O simulador envia `entry_time` e `exit_time` sem offset, embora seu relógio esteja em UTC. O webhook aceita esse formato específico como UTC e continua aceitando o contrato ISO-8601 com `Z` ou offset. Essa compatibilidade fica restrita à desserialização dos horários do webhook; persistência, regra financeira e contrato de resposta não foram alterados.
+
+O simulador não oferece comandos determinísticos para duplicidade, inversão de ordem, lotação ou concorrência. Esses cenários permanecem cobertos pelos testes automatizados transacionais; o E2E real valida entrega HTTP e o fluxo espontâneo, não substitui a suíte. Como os containers usam `--rm`, o banco E2E é intencionalmente efêmero.
 
 ## Modelo de persistência
 

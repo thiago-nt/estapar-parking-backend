@@ -5,13 +5,14 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.time.Instant;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ExitEventRequest(
         @JsonProperty("license_plate") @NotBlank @Size(max = 20) String licensePlate,
-        @JsonProperty("exit_time") @NotNull Instant exitTime,
+        @JsonProperty("exit_time") @JsonDeserialize(using = WebhookInstantDeserializer.class) @NotNull Instant exitTime,
         @JsonProperty("event_type") @NotNull WebhookEventType eventType
 ) implements WebhookEventRequest {
 }
