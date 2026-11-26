@@ -20,6 +20,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -159,6 +160,79 @@ class GarageSyncServiceIntegrationTest {
                 sectorRepository.findByCode("A").orElseThrow().getBasePrice().compareTo(BigDecimal.TEN)
         );
         assertEquals(ParkingSpotStatus.OCCUPIED, parkingSpotRepository.findById(1L).orElseThrow().getStatus());
+    }
+
+    @Test
+    void shouldRejectGlobalCapacityReductionBelowActiveSessions() {
+        syncService.synchronize(configuration(
+                BigDecimal.TEN,
+                2,
+                List.of(spot(1L, "0", "0"), spot(2L, "1", "1"))
+        ));
+        insertEnteredSession("ZUL0001");
+        insertEnteredSession("ZUL0002");
+
+        GarageConfigurationResponse reducedCapacity = configuration(
+                new BigDecimal("20.00"),
+                1,
+                List.of(spot(1L, "0", "0"), spot(2L, "1", "1"))
+        );
+
+        assertThrows(GarageSyncConflictException.class, () -> syncService.synchronize(reducedCapacity));
+        var sector = sectorRepository.findByCode("A").orElseThrow();
+        assertEquals(2, sector.getMaxCapacity());
+        assertEquals(0, sector.getBasePrice().compareTo(BigDecimal.TEN));
+    }
+
+    @Test
+    void shouldRejectSectorCapacityReductionBelowParkedSessions() {
+        syncService.synchronize(configuration(
+                BigDecimal.TEN,
+                2,
+                List.of(spot(1L, "0", "0"), spot(2L, "1", "1"))
+        ));
+        jdbcTemplate.update(
+                "INSERT INTO sector (code, base_price, max_capacity) VALUES ('B', 10.00, 10)"
+        );
+        long sectorId = sectorRepository.findByCode("A").orElseThrow().getId();
+        insertParkedSession("ZUL0001", sectorId, 1L);
+        insertParkedSession("ZUL0002", sectorId, 2L);
+
+        GarageConfigurationResponse reducedCapacity = configuration(
+                new BigDecimal("20.00"),
+                1,
+                List.of(spot(1L, "0", "0"), spot(2L, "1", "1"))
+        );
+
+        assertThrows(GarageSyncConflictException.class, () -> syncService.synchronize(reducedCapacity));
+        var sector = sectorRepository.findByCode("A").orElseThrow();
+        assertEquals(2, sector.getMaxCapacity());
+        assertEquals(0, sector.getBasePrice().compareTo(BigDecimal.TEN));
+    }
+
+    private void insertEnteredSession(String licensePlate) {
+        jdbcTemplate.update(
+                "INSERT INTO parking_session (license_plate, status, entry_time) VALUES (?, 'ENTERED', ?)",
+                licensePlate,
+                LocalDateTime.of(2025, 1, 1, 12, 0)
+        );
+    }
+
+    private void insertParkedSession(String licensePlate, long sectorId, long spotId) {
+        jdbcTemplate.update("UPDATE parking_spot SET status = 'OCCUPIED' WHERE id = ?", spotId);
+        jdbcTemplate.update(
+                """
+                        INSERT INTO parking_session
+                            (license_plate, status, entry_time, parked_at, parking_spot_id, sector_id,
+                             base_price_at_parking, applied_multiplier)
+                        VALUES (?, 'PARKED', ?, ?, ?, ?, 10.00, 1.00)
+                        """,
+                licensePlate,
+                LocalDateTime.of(2025, 1, 1, 12, 0),
+                LocalDateTime.of(2025, 1, 1, 12, 1),
+                spotId,
+                sectorId
+        );
     }
 
     private static GarageConfigurationResponse configuration(

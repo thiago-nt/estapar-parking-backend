@@ -1,8 +1,10 @@
 package br.com.estapar.parking.application;
 
 import br.com.estapar.parking.domain.model.ParkingSpot;
+import br.com.estapar.parking.domain.model.ParkingSessionStatus;
 import br.com.estapar.parking.domain.model.Sector;
 import br.com.estapar.parking.infrastructure.persistence.repository.GarageStateRepository;
+import br.com.estapar.parking.infrastructure.persistence.repository.ParkingSessionRepository;
 import br.com.estapar.parking.infrastructure.persistence.repository.ParkingSpotRepository;
 import br.com.estapar.parking.infrastructure.persistence.repository.SectorRepository;
 import br.com.estapar.parking.infrastructure.simulator.dto.GarageConfigurationResponse;
@@ -16,25 +18,31 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class GarageSyncService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GarageSyncService.class);
+    private static final Set<ParkingSessionStatus> ACTIVE_STATUSES =
+            Set.of(ParkingSessionStatus.ENTERED, ParkingSessionStatus.PARKED);
 
     private final GarageConfigurationValidator validator;
     private final SectorRepository sectorRepository;
+    private final ParkingSessionRepository parkingSessionRepository;
     private final ParkingSpotRepository parkingSpotRepository;
     private final GarageStateRepository garageStateRepository;
 
     public GarageSyncService(
             GarageConfigurationValidator validator,
             SectorRepository sectorRepository,
+            ParkingSessionRepository parkingSessionRepository,
             ParkingSpotRepository parkingSpotRepository,
             GarageStateRepository garageStateRepository
     ) {
         this.validator = validator;
         this.sectorRepository = sectorRepository;
+        this.parkingSessionRepository = parkingSessionRepository;
         this.parkingSpotRepository = parkingSpotRepository;
         this.garageStateRepository = garageStateRepository;
     }
@@ -64,6 +72,8 @@ public class GarageSyncService {
             }
             sectorsByCode.put(normalizeSectorCode(sectorResponse.sector()), sector);
         }
+
+        validateCapacityAgainstActiveSessions();
 
         int spotsInserted = 0;
         int spotsUpdated = 0;
@@ -106,6 +116,28 @@ public class GarageSyncService {
                 spotsInserted,
                 spotsUpdated
         );
+    }
+
+    private void validateCapacityAgainstActiveSessions() {
+        long activeSessions = parkingSessionRepository.countByStatusIn(ACTIVE_STATUSES);
+        long globalCapacity = sectorRepository.sumMaxCapacity();
+        if (activeSessions > globalCapacity) {
+            throw new GarageSyncConflictException(
+                    "Garage capacity cannot be reduced below the number of active parking sessions"
+            );
+        }
+
+        for (Sector sector : sectorRepository.findAll()) {
+            long parkedSessions = parkingSessionRepository.countBySectorIdAndStatus(
+                    sector.getId(),
+                    ParkingSessionStatus.PARKED
+            );
+            if (parkedSessions > sector.getMaxCapacity()) {
+                throw new GarageSyncConflictException(
+                        "Sector capacity cannot be reduced below its number of parked sessions"
+                );
+            }
+        }
     }
 
     private String normalizeSectorCode(String code) {

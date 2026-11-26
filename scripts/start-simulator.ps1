@@ -3,10 +3,7 @@ param(
     [int]$SimulatorPort = 3001,
 
     [ValidateRange(1, 65535)]
-    [int]$MySqlPort = 3308,
-
-    [ValidateRange(1, 65535)]
-    [int]$BackendPort = 3003
+    [int]$MySqlPort = 3308
 )
 
 Set-StrictMode -Version Latest
@@ -15,6 +12,7 @@ $ErrorActionPreference = "Stop"
 $mysqlContainer = "estapar-e2e-mysql"
 $simulatorContainer = "estapar-e2e-simulator"
 $proxyContainer = "estapar-e2e-webhook-proxy"
+$backendPort = 3003
 $ownershipLabel = "br.com.estapar.parking.e2e=true"
 $createdContainers = New-Object System.Collections.Generic.List[string]
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -71,7 +69,7 @@ Assert-CommandAvailable "docker"
 Invoke-Docker @("info", "--format", "{{.ServerVersion}}")
 Assert-PortAvailable $SimulatorPort
 Assert-PortAvailable $MySqlPort
-Assert-PortAvailable $BackendPort
+Assert-PortAvailable $backendPort
 Assert-ContainerNameAvailable $mysqlContainer
 Assert-ContainerNameAvailable $simulatorContainer
 Assert-ContainerNameAvailable $proxyContainer
