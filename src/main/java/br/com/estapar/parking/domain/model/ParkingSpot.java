@@ -90,6 +90,13 @@ public class ParkingSpot extends AuditableEntity {
         status = ParkingSpotStatus.OCCUPIED;
     }
 
+    public void release() {
+        if (!isOccupied()) {
+            throw new IllegalStateException("Parking spot is not occupied");
+        }
+        status = ParkingSpotStatus.AVAILABLE;
+    }
+
     public void updateMetadata(Sector sector, BigDecimal latitude, BigDecimal longitude) {
         this.sector = Objects.requireNonNull(sector, "sector must not be null");
         this.latitude = Objects.requireNonNull(latitude, "latitude must not be null");

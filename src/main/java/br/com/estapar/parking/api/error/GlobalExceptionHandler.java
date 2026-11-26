@@ -2,11 +2,13 @@ package br.com.estapar.parking.api.error;
 
 import br.com.estapar.parking.application.ActiveParkingSessionConflictException;
 import br.com.estapar.parking.application.GarageFullException;
+import br.com.estapar.parking.application.IncompleteParkingSessionPricingException;
 import br.com.estapar.parking.application.InvalidParkingSessionStateException;
 import br.com.estapar.parking.application.ParkingEventProcessingUnavailableException;
 import br.com.estapar.parking.application.ParkingSessionNotFoundException;
 import br.com.estapar.parking.application.ParkingSpotNotFoundException;
 import br.com.estapar.parking.application.ParkingSpotOccupiedException;
+import br.com.estapar.parking.application.ParkingSpotStateConflictException;
 import br.com.estapar.parking.application.SectorCapacityExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,7 +52,9 @@ public class GlobalExceptionHandler {
             ActiveParkingSessionConflictException.class,
             ParkingSessionNotFoundException.class,
             ParkingSpotOccupiedException.class,
+            ParkingSpotStateConflictException.class,
             InvalidParkingSessionStateException.class,
+            IncompleteParkingSessionPricingException.class,
             SectorCapacityExceededException.class
     })
     public ResponseEntity<ApiErrorResponse> handleConflict(RuntimeException exception) {

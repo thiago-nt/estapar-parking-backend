@@ -4,6 +4,7 @@ import br.com.estapar.parking.domain.model.ParkingSession;
 import br.com.estapar.parking.domain.model.ParkingSessionStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Optional;
 
@@ -17,4 +18,10 @@ public interface ParkingSessionRepository extends JpaRepository<ParkingSession, 
     long countByStatusIn(Collection<ParkingSessionStatus> statuses);
 
     long countBySectorIdAndStatus(Long sectorId, ParkingSessionStatus status);
+
+    boolean existsByLicensePlateAndStatusAndExitTime(
+            String licensePlate,
+            ParkingSessionStatus status,
+            Instant exitTime
+    );
 }

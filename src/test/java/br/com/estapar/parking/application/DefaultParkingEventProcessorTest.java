@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Instant;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
@@ -17,8 +16,9 @@ class DefaultParkingEventProcessorTest {
 
     private final ParkingEntryService entryService = mock(ParkingEntryService.class);
     private final ParkingSpotAssignmentService spotAssignmentService = mock(ParkingSpotAssignmentService.class);
+    private final ParkingExitService exitService = mock(ParkingExitService.class);
     private final DefaultParkingEventProcessor processor =
-            new DefaultParkingEventProcessor(entryService, spotAssignmentService);
+            new DefaultParkingEventProcessor(entryService, spotAssignmentService, exitService);
 
     @Test
     void shouldDelegateEntryToRealEntryService() {
@@ -48,13 +48,15 @@ class DefaultParkingEventProcessorTest {
     }
 
     @Test
-    void shouldKeepExitProcessingUnavailable() {
+    void shouldDelegateExitToRealExitService() {
         ExitEventRequest event = new ExitEventRequest(
                 "ZUL0001",
                 Instant.parse("2025-01-01T13:00:00Z"),
                 WebhookEventType.EXIT
         );
 
-        assertThrows(ParkingEventProcessingUnavailableException.class, () -> processor.processExit(event));
+        processor.processExit(event);
+
+        verify(exitService).processExit(event);
     }
 }

@@ -97,7 +97,7 @@ Falhas transitórias de conexão e respostas HTTP 5xx recebem um número limitad
 .\mvnw.cmd clean verify
 ```
 
-Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados. A suíte cobre os fluxos `ENTRY` e `PARKED`, reentregas idempotentes, conflitos de estado e vaga, limite de capacidade, rollback, concorrência e as regras de preço dinâmico e tarifa horária.
+Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados. A suíte cobre o fluxo completo `ENTRY -> PARKED -> EXIT`, reentregas idempotentes, conflitos de estado e vaga, recuperação de capacidade, rollback, concorrência e as regras de preço dinâmico e tarifa horária.
 
 ## Health check
 
@@ -170,9 +170,9 @@ Os timestamps usam ISO-8601 UTC e são convertidos para `Instant`. As coordenada
 - `200`: evento validado e efetivamente processado;
 - `400`: JSON malformado, tipo desconhecido ou campo inválido;
 - `404`: vaga não encontrada para as coordenadas informadas;
-- `409`: garagem ou setor cheio, placa com sessão conflitante ou vaga ocupada;
+- `409`: capacidade esgotada, sequência inválida, preço congelado incompleto ou estado inconsistente de sessão/vaga;
 - `415`: `Content-Type` diferente de `application/json`;
-- `503`: configuração da garagem ainda não pronta ou processador indisponível;
+- `503`: configuração da garagem ainda não pronta;
 - `500`: falha interna inesperada.
 
 As respostas de erro possuem os campos JSON `code` e `message`, sem stack trace.
@@ -225,9 +225,9 @@ O evento `PARKED` realiza a transição `ENTERED -> PARKED` em uma única transa
 
 Uma reentrega para a mesma vaga retorna `200` sem alterar `parked_at` nem o preço capturado. A tentativa de mover uma sessão já estacionada para outra vaga recebe `409`. Placa sem sessão ativa, sessão encerrada, vaga ocupada ou setor sem capacidade também recebem `409`; coordenadas desconhecidas recebem `404`.
 
-A máquina de estados permite apenas `ENTERED -> PARKED` nesta etapa. `PARKED -> PARKED` só é aceito como repetição idempotente na mesma vaga; sessões `EXITED` não são reabertas.
+A máquina de estados permite `ENTERED -> PARKED -> EXITED`. `PARKED -> PARKED` só é aceito como repetição idempotente na mesma vaga; sessões `EXITED` não são reabertas.
 
-A capacidade do setor considera apenas sessões `PARKED`. O evento não volta a consumir capacidade global, pois o veículo já foi contabilizado no `ENTRY`. Os campos `base_price_at_parking` e `applied_multiplier` são congelados no primeiro PARKED; `amount` permanece nulo até o processamento futuro do `EXIT`.
+A capacidade do setor considera apenas sessões `PARKED`. O evento não volta a consumir capacidade global, pois o veículo já foi contabilizado no `ENTRY`. Os campos `base_price_at_parking` e `applied_multiplier` são congelados no primeiro PARKED; `amount` permanece nulo até o processamento do `EXIT`.
 
 Como o simulador não informa o horário do estacionamento, `parked_at` registra, em UTC, o instante em que o evento foi processado. Esse valor é uma estimativa operacional; o tempo de cobrança continuará baseado em `entry_time` e `exit_time`.
 
@@ -248,7 +248,7 @@ Os limites são comparados por aritmética inteira, sem arredondar previamente o
 
 O primeiro PARKED captura `sector.base_price` e o multiplicador em `parking_session`. Reentregas idempotentes não recalculam nem alteram preço, multiplicador, `parked_at` ou `amount`, mesmo que o setor seja reconfigurado depois.
 
-O cálculo tarifário disponível para uso futuro segue:
+O cálculo tarifário usado no `EXIT` segue:
 
 ```text
 amount = horas_cobráveis × preço-base-capturado × multiplicador-capturado
@@ -256,15 +256,33 @@ amount = horas_cobráveis × preço-base-capturado × multiplicador-capturado
 
 Até 30 minutos, inclusive, o valor é `0.00`. Acima dessa tolerância, toda a duração desde a entrada é cobrada e arredondada para cima em blocos de uma hora; por exemplo, 60 minutos e 1 milissegundo resultam em duas horas. Os cálculos usam `Duration` e `BigDecimal`, com `RoundingMode.HALF_UP` e escala monetária de duas casas somente no resultado final.
 
-Sessões legadas podem possuir `applied_multiplier` nulo. Não existe backfill com a ocupação atual, pois isso reconstruiria um preço historicamente incorreto. O futuro processamento de `EXIT` deverá rejeitar ou tratar explicitamente sessões sem dados financeiros completos, sem cobrar valor arbitrário.
+Sessões legadas podem possuir `applied_multiplier` nulo. Não existe backfill com a ocupação atual, pois isso reconstruiria um preço historicamente incorreto. O `EXIT` rejeita essas sessões com `409`, preservando a sessão `PARKED` e a vaga `OCCUPIED`, sem cobrar valor arbitrário.
+
+### Processamento transacional de EXIT
+
+O evento `EXIT` realiza a transição `PARKED -> EXITED` e libera a vaga na mesma transação:
+
+1. confirma o readiness e obtém `PESSIMISTIC_WRITE` na linha `garage_state` de ID `1`;
+2. procura primeiro uma sessão `EXITED` com a mesma placa e o mesmo `exit_time` em precisão de microssegundos;
+3. quando não é uma repetição, busca a sessão ativa e exige o estado `PARKED`;
+4. valida `exit_time >= entry_time`, os valores financeiros congelados e a vaga `OCCUPIED` associada;
+5. calcula `amount` com `PricingService`, usando somente entrada, saída, preço-base e multiplicador congelados;
+6. grava `EXITED`, `exit_time` e `amount`, preservando vaga e setor como histórico;
+7. altera a vaga para `AVAILABLE` e confirma todas as mudanças atomicamente.
+
+Uma sessão apenas `ENTERED` recebe `409`: sem PARKED não há vaga, setor e preço congelado confiáveis, portanto o sistema não inventa uma tarifa. O horário do evento pode ser histórico e não é comparado com `parked_at`, que representa apenas o instante de processamento; a validação e a cobrança usam `entry_time` e `exit_time`.
+
+O EXIT duplicado com a mesma placa e horário retorna `200` sem recalcular ou atualizar dados. A busca histórica acontece antes da sessão ativa, então uma repetição antiga não encerra uma nova entrada da mesma placa. Se o horário antigo for anterior à nova entrada e não corresponder a um EXIT registrado, a nova sessão também não é encerrada. Sem `event_id`, eventos antigos não registrados cujo horário seja compatível com uma sessão nova não podem ser distinguidos perfeitamente.
+
+O mesmo lock global serializa EXIT com ENTRY e PARKED. Após o commit de EXIT, a sessão deixa de participar de `COUNT(status IN ('ENTERED', 'PARKED'))`, liberando capacidade para uma nova entrada. EXITs simultâneos para a mesma sessão resultam em uma finalização e uma resposta idempotente. Qualquer falha ao liberar a vaga reverte também status, horário e valor da sessão.
 
 ### Limitação temporária
 
-Esta etapa não implementa `EXIT`, `GET /revenue`, pagamentos nem novas APIs. `EXIT` continua retornando `503`; o cálculo de tarifa é puro e ainda não grava `amount` ou receita.
+`GET /revenue`, pagamentos e novas APIs não fazem parte desta etapa. A receita será calculada posteriormente a partir das sessões `EXITED` e de seus valores persistidos; não existe tabela separada de receita.
 
 A aplicação deve usar `GARAGE_SIMULATOR_URL=http://localhost:3001` para consultar a garagem. A imagem do simulador atualmente tenta entregar o webhook em `localhost:3003` a partir do próprio container e pode não respeitar a variável externa configurada. Em Docker Desktop com rede bridge, isso não aponta automaticamente para o host; consulte os logs do container e não trate falhas de entrega como processamento bem-sucedido.
 
-O próximo passo é implementar o encerramento da sessão e o cálculo tarifário no evento `EXIT`.
+O próximo passo é implementar a consulta de receita no Dia 3.
 
 ## Modelo de persistência
 

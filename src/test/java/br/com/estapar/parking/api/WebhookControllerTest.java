@@ -6,6 +6,7 @@ import br.com.estapar.parking.api.dto.ParkedEventRequest;
 import br.com.estapar.parking.application.ActiveParkingSessionConflictException;
 import br.com.estapar.parking.application.GarageInitializationState;
 import br.com.estapar.parking.application.GarageFullException;
+import br.com.estapar.parking.application.IncompleteParkingSessionPricingException;
 import br.com.estapar.parking.application.ParkingEventProcessor;
 import br.com.estapar.parking.application.ParkingSpotNotFoundException;
 import br.com.estapar.parking.application.ParkingSpotOccupiedException;
@@ -293,6 +294,19 @@ class WebhookControllerTest {
                 .andExpect(jsonPath("$.code").value("PARKING_CONFLICT"));
     }
 
+    @Test
+    void shouldReturnConflictWhenExitPricingIsIncomplete() throws Exception {
+        doThrow(new IncompleteParkingSessionPricingException("Frozen pricing is incomplete"))
+                .when(processor)
+                .processExit(any(ExitEventRequest.class));
+
+        mockMvc.perform(post("/webhook")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validExit()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PARKING_CONFLICT"));
+    }
+
     private MockMvc mockMvc(ParkingEventProcessor eventProcessor, GarageInitializationState state) {
         WebhookEventDispatcher dispatcher = new WebhookEventDispatcher(eventProcessor, state);
         WebhookController controller = new WebhookController(dispatcher);
@@ -319,6 +333,16 @@ class WebhookControllerTest {
                   "lat": -23.561684,
                   "lng": -46.655981,
                   "event_type": "PARKED"
+                }
+                """;
+    }
+
+    private String validExit() {
+        return """
+                {
+                  "license_plate": "ZUL0001",
+                  "exit_time": "2025-01-01T13:30:00Z",
+                  "event_type": "EXIT"
                 }
                 """;
     }

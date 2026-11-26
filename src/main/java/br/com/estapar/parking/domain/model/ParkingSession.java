@@ -150,4 +150,22 @@ public class ParkingSession extends AuditableEntity {
         this.appliedMultiplier = pricingMultiplier;
         this.status = ParkingSessionStatus.PARKED;
     }
+
+    public void finish(Instant exitTime, BigDecimal amount) {
+        if (status != ParkingSessionStatus.PARKED) {
+            throw new IllegalStateException("Only a parked session can be finished");
+        }
+        Instant finishedAt = Objects.requireNonNull(exitTime, "exitTime must not be null");
+        if (finishedAt.isBefore(entryTime)) {
+            throw new IllegalArgumentException("exitTime must not be before entryTime");
+        }
+        BigDecimal finalAmount = Objects.requireNonNull(amount, "amount must not be null");
+        if (finalAmount.signum() < 0) {
+            throw new IllegalArgumentException("amount must not be negative");
+        }
+
+        this.exitTime = finishedAt;
+        this.amount = finalAmount;
+        this.status = ParkingSessionStatus.EXITED;
+    }
 }

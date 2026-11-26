@@ -8,18 +8,18 @@ import org.springframework.stereotype.Service;
 @Service
 public class DefaultParkingEventProcessor implements ParkingEventProcessor {
 
-    private static final String UNAVAILABLE_MESSAGE =
-            "Parking event processing is not available for this event type yet";
-
     private final ParkingEntryService parkingEntryService;
     private final ParkingSpotAssignmentService parkingSpotAssignmentService;
+    private final ParkingExitService parkingExitService;
 
     public DefaultParkingEventProcessor(
             ParkingEntryService parkingEntryService,
-            ParkingSpotAssignmentService parkingSpotAssignmentService
+            ParkingSpotAssignmentService parkingSpotAssignmentService,
+            ParkingExitService parkingExitService
     ) {
         this.parkingEntryService = parkingEntryService;
         this.parkingSpotAssignmentService = parkingSpotAssignmentService;
+        this.parkingExitService = parkingExitService;
     }
 
     @Override
@@ -34,10 +34,6 @@ public class DefaultParkingEventProcessor implements ParkingEventProcessor {
 
     @Override
     public void processExit(ExitEventRequest event) {
-        throw unavailable();
-    }
-
-    private ParkingEventProcessingUnavailableException unavailable() {
-        return new ParkingEventProcessingUnavailableException(UNAVAILABLE_MESSAGE);
+        parkingExitService.processExit(event);
     }
 }
