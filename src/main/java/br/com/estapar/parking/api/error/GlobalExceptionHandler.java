@@ -3,6 +3,7 @@ package br.com.estapar.parking.api.error;
 import br.com.estapar.parking.application.ActiveParkingSessionConflictException;
 import br.com.estapar.parking.application.GarageFullException;
 import br.com.estapar.parking.application.IncompleteParkingSessionPricingException;
+import br.com.estapar.parking.application.InvalidRevenueRequestException;
 import br.com.estapar.parking.application.InvalidParkingSessionStateException;
 import br.com.estapar.parking.application.ParkingEventProcessingUnavailableException;
 import br.com.estapar.parking.application.ParkingSessionNotFoundException;
@@ -10,6 +11,7 @@ import br.com.estapar.parking.application.ParkingSpotNotFoundException;
 import br.com.estapar.parking.application.ParkingSpotOccupiedException;
 import br.com.estapar.parking.application.ParkingSpotStateConflictException;
 import br.com.estapar.parking.application.SectorCapacityExceededException;
+import br.com.estapar.parking.application.SectorNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -19,15 +21,21 @@ import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentNotValidException.class})
+    @ExceptionHandler({
+            HttpMessageNotReadableException.class,
+            MethodArgumentNotValidException.class,
+            MethodArgumentTypeMismatchException.class,
+            InvalidRevenueRequestException.class
+    })
     public ResponseEntity<ApiErrorResponse> handleInvalidRequest(Exception exception) {
-        LOGGER.warn("Webhook request validation failed exceptionType={}", exception.getClass().getSimpleName());
+        LOGGER.warn("HTTP request validation failed exceptionType={}", exception.getClass().getSimpleName());
         return response(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "Request payload is invalid");
     }
 
@@ -66,6 +74,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleParkingSpotNotFound(ParkingSpotNotFoundException exception) {
         LOGGER.warn("Parking spot lookup failed reason={}", exception.getMessage());
         return response(HttpStatus.NOT_FOUND, "PARKING_SPOT_NOT_FOUND", exception.getMessage());
+    }
+
+    @ExceptionHandler(SectorNotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleSectorNotFound(SectorNotFoundException exception) {
+        LOGGER.warn("Revenue sector lookup failed reason={}", exception.getMessage());
+        return response(HttpStatus.NOT_FOUND, "SECTOR_NOT_FOUND", exception.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

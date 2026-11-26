@@ -58,3 +58,6 @@ garage:
     retry:
       max-attempts: ${GARAGE_SIMULATOR_RETRY_MAX_ATTEMPTS:3}
       backoff: ${GARAGE_SIMULATOR_RETRY_BACKOFF:1s}
+
+revenue:
+  zone-id: ${REVENUE_ZONE_ID:America/Sao_Paulo}

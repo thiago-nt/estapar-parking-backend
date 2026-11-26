@@ -41,6 +41,7 @@ A integração consulta `http://localhost:3000/garage` por padrão. A URL e os l
 - `GARAGE_SIMULATOR_RETRY_MAX_ATTEMPTS`
 - `GARAGE_SIMULATOR_RETRY_BACKOFF`
 - `GARAGE_SIMULATOR_ENABLED`
+- `REVENUE_ZONE_ID` (padrão `America/Sao_Paulo`)
 
 ## Subir o MySQL
 
@@ -97,7 +98,7 @@ Falhas transitórias de conexão e respostas HTTP 5xx recebem um número limitad
 .\mvnw.cmd clean verify
 ```
 
-Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados. A suíte cobre o fluxo completo `ENTRY -> PARKED -> EXIT`, reentregas idempotentes, conflitos de estado e vaga, recuperação de capacidade, rollback, concorrência e as regras de preço dinâmico e tarifa horária.
+Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados. A suíte cobre o fluxo completo `ENTRY -> PARKED -> EXIT -> REVENUE`, reentregas idempotentes, conflitos de estado e vaga, recuperação de capacidade, rollback, concorrência, preço dinâmico, tarifa horária e limites de data no fuso de negócio.
 
 ## Health check
 
@@ -276,13 +277,52 @@ O EXIT duplicado com a mesma placa e horário retorna `200` sem recalcular ou at
 
 O mesmo lock global serializa EXIT com ENTRY e PARKED. Após o commit de EXIT, a sessão deixa de participar de `COUNT(status IN ('ENTERED', 'PARKED'))`, liberando capacidade para uma nova entrada. EXITs simultâneos para a mesma sessão resultam em uma finalização e uma resposta idempotente. Qualquer falha ao liberar a vaga reverte também status, horário e valor da sessão.
 
-### Limitação temporária
+## Consulta de receita
 
-`GET /revenue`, pagamentos e novas APIs não fazem parte desta etapa. A receita será calculada posteriormente a partir das sessões `EXITED` e de seus valores persistidos; não existe tabela separada de receita.
+`GET http://localhost:3003/revenue` consolida a receita diária de um setor. Query parameters são a interface HTTP principal: `sector` é obrigatório e `date`, no formato ISO `yyyy-MM-dd`, é opcional. Sem data, a consulta usa o dia atual no fuso configurado por `REVENUE_ZONE_ID`.
+
+```powershell
+Invoke-RestMethod "http://localhost:3003/revenue?date=2025-01-01&sector=A"
+```
+
+Por compatibilidade com o contrato do desafio, um body JSON também é aceito em `GET`, sem ser obrigatório:
+
+```json
+{
+  "date": "2025-01-01",
+  "sector": "A"
+}
+```
+
+Quando query e body informam o mesmo campo, os valores precisam ser equivalentes; divergências retornam `400`. A resposta tem o formato:
+
+```json
+{
+  "amount": 72.90,
+  "currency": "BRL",
+  "timestamp": "2026-11-25T20:00:00Z"
+}
+```
+
+A receita é `SUM(parking_session.amount)` somente de sessões `EXITED` do setor, atribuída pela data local de `exit_time`. O valor já congelado e persistido no EXIT é a única fonte financeira: a consulta não recalcula tarifa, multiplicador ou preço atual do setor. Um setor existente sem saídas retorna `0.00`; saídas ainda não confirmadas não ficam visíveis.
+
+Os limites são calculados como `[início do dia, início do próximo dia)` em `REVENUE_ZONE_ID` e convertidos para UTC. No dia atual, o limite superior é o instante do `Clock`; datas futuras retornam zero. Isso evita `DATE(exit_time)` e preserva o uso do índice existente `(sector_id, exit_time)`.
+
+### Códigos HTTP de receita
+
+- `200`: consulta válida, inclusive com receita `0.00`;
+- `400`: setor ausente, data inválida, JSON malformado ou conflito entre query e body;
+- `404`: setor inexistente;
+- `503`: configuração da garagem ainda não pronta;
+- `500`: falha interna inesperada.
+
+Não existe tabela ou cache de receita. Pagamentos e novas APIs permanecem fora do escopo desta etapa.
+
+### Limitação do simulador e próxima etapa
 
 A aplicação deve usar `GARAGE_SIMULATOR_URL=http://localhost:3001` para consultar a garagem. A imagem do simulador atualmente tenta entregar o webhook em `localhost:3003` a partir do próprio container e pode não respeitar a variável externa configurada. Em Docker Desktop com rede bridge, isso não aponta automaticamente para o host; consulte os logs do container e não trate falhas de entrega como processamento bem-sucedido.
 
-O próximo passo é implementar a consulta de receita no Dia 3.
+O próximo passo é ampliar a validação ponta a ponta com o simulador em uma topologia de rede que entregue webhooks ao host de forma confiável.
 
 ## Modelo de persistência
 
