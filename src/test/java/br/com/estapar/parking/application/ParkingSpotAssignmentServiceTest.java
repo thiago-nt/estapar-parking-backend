@@ -8,6 +8,7 @@ import br.com.estapar.parking.domain.model.ParkingSessionStatus;
 import br.com.estapar.parking.domain.model.ParkingSpot;
 import br.com.estapar.parking.domain.model.ParkingSpotStatus;
 import br.com.estapar.parking.domain.model.Sector;
+import br.com.estapar.parking.domain.service.DynamicPricingPolicy;
 import br.com.estapar.parking.infrastructure.persistence.repository.GarageStateRepository;
 import br.com.estapar.parking.infrastructure.persistence.repository.ParkingSessionRepository;
 import br.com.estapar.parking.infrastructure.persistence.repository.ParkingSpotRepository;
@@ -26,6 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -42,6 +45,7 @@ class ParkingSpotAssignmentServiceTest {
     private GarageStateRepository garageStateRepository;
     private ParkingSessionRepository parkingSessionRepository;
     private ParkingSpotRepository parkingSpotRepository;
+    private DynamicPricingPolicy dynamicPricingPolicy;
     private ParkingSession session;
     private Sector sector;
     private ParkingSpot spot;
@@ -54,12 +58,14 @@ class ParkingSpotAssignmentServiceTest {
         garageStateRepository = mock(GarageStateRepository.class);
         parkingSessionRepository = mock(ParkingSessionRepository.class);
         parkingSpotRepository = mock(ParkingSpotRepository.class);
+        dynamicPricingPolicy = mock(DynamicPricingPolicy.class);
         Clock clock = Clock.fixed(PARKED_AT, ZoneOffset.UTC);
         service = new ParkingSpotAssignmentService(
                 initializationState,
                 garageStateRepository,
                 parkingSessionRepository,
                 parkingSpotRepository,
+                dynamicPricingPolicy,
                 clock
         );
 
@@ -73,6 +79,8 @@ class ParkingSpotAssignmentServiceTest {
         when(parkingSpotRepository.findByLatitudeAndLongitude(LATITUDE, LONGITUDE))
                 .thenReturn(Optional.of(spot));
         when(parkingSessionRepository.countBySectorIdAndStatus(any(), any())).thenReturn(0L);
+        when(dynamicPricingPolicy.calculateMultiplier(anyLong(), anyInt()))
+                .thenReturn(new BigDecimal("0.90"));
     }
 
     @Test
@@ -106,12 +114,23 @@ class ParkingSpotAssignmentServiceTest {
     }
 
     @Test
-    void shouldCaptureSectorBasePriceWithoutCalculatingAmount() {
+    void shouldCaptureSectorBasePriceAndMultiplierWithoutCalculatingAmount() {
         service.processParked(event());
 
         assertEquals(0, session.getBasePriceAtParking().compareTo(new BigDecimal("40.50")));
-        assertNull(session.getAppliedMultiplier());
+        assertEquals(new BigDecimal("0.90"), session.getAppliedMultiplier());
         assertNull(session.getAmount());
+    }
+
+    @Test
+    void shouldIncludeCurrentSessionExactlyOnceInPricingOccupancy() {
+        when(parkingSessionRepository.countBySectorIdAndStatus(any(), any())).thenReturn(2L);
+        when(dynamicPricingPolicy.calculateMultiplier(3L, 10)).thenReturn(new BigDecimal("1.00"));
+
+        service.processParked(event());
+
+        verify(dynamicPricingPolicy).calculateMultiplier(3L, 10);
+        assertEquals(new BigDecimal("1.00"), session.getAppliedMultiplier());
     }
 
     @Test
@@ -123,24 +142,29 @@ class ParkingSpotAssignmentServiceTest {
 
     @Test
     void shouldTreatDuplicateParkedAsIdempotent() {
-        session.assignParkingSpot(spot, PARKED_AT.minusSeconds(30));
+        session.assignParkingSpot(spot, PARKED_AT.minusSeconds(30), new BigDecimal("0.90"));
         spot.occupy();
 
         assertDoesNotThrow(() -> service.processParked(event()));
         verify(parkingSessionRepository, never()).saveAndFlush(any());
+        verify(dynamicPricingPolicy, never()).calculateMultiplier(anyLong(), anyInt());
     }
 
     @Test
     void shouldNotChangeParkedAtOrPriceOnDuplicate() {
         Instant originalParkedAt = PARKED_AT.minusSeconds(30);
-        session.assignParkingSpot(spot, originalParkedAt);
+        session.assignParkingSpot(spot, originalParkedAt, new BigDecimal("0.90"));
         spot.occupy();
         BigDecimal originalPrice = session.getBasePriceAtParking();
+        BigDecimal originalMultiplier = session.getAppliedMultiplier();
+        sector.updateConfiguration(new BigDecimal("99.99"), 10);
 
         service.processParked(event());
 
         assertEquals(originalParkedAt, session.getParkedAt());
         assertEquals(originalPrice, session.getBasePriceAtParking());
+        assertEquals(originalMultiplier, session.getAppliedMultiplier());
+        assertNull(session.getAmount());
     }
 
     @Test
@@ -174,7 +198,7 @@ class ParkingSpotAssignmentServiceTest {
                 new BigDecimal("-23.5616850"),
                 new BigDecimal("-46.6559820")
         );
-        session.assignParkingSpot(otherSpot, PARKED_AT.minusSeconds(30));
+        session.assignParkingSpot(otherSpot, PARKED_AT.minusSeconds(30), new BigDecimal("0.90"));
         otherSpot.occupy();
 
         assertThrows(InvalidParkingSessionStateException.class, () -> service.processParked(event()));
@@ -212,6 +236,7 @@ class ParkingSpotAssignmentServiceTest {
                 garageStateRepository,
                 parkingSessionRepository,
                 parkingSpotRepository,
+                dynamicPricingPolicy,
                 Clock.fixed(PARKED_AT, ZoneOffset.UTC)
         );
 

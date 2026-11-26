@@ -110,7 +110,7 @@ class ParkingSpotAssignmentServiceIntegrationTest {
         assertEquals(1L, session.getParkingSpot().getId());
         assertEquals(sectorId, session.getSector().getId());
         assertEquals(0, session.getBasePriceAtParking().compareTo(new BigDecimal("40.50")));
-        assertNull(session.getAppliedMultiplier());
+        assertEquals(new BigDecimal("0.90"), session.getAppliedMultiplier());
         assertNull(session.getAmount());
         assertEquals(ParkingSpotStatus.OCCUPIED, spot.getStatus());
     }
@@ -122,14 +122,75 @@ class ParkingSpotAssignmentServiceIntegrationTest {
         entryService.processEntry(entry("ZUL0001", ENTRY_TIME));
         ParkedEventRequest event = parked("ZUL0001", LATITUDE, LONGITUDE);
         assignmentService.processParked(event);
-        Instant originalParkedAt = parkingSessionRepository.findAll().getFirst().getParkedAt();
+        var originalSession = parkingSessionRepository.findAll().getFirst();
+        Instant originalParkedAt = originalSession.getParkedAt();
+        BigDecimal originalBasePrice = originalSession.getBasePriceAtParking();
+        BigDecimal originalMultiplier = originalSession.getAppliedMultiplier();
+        jdbcTemplate.update(
+                "UPDATE sector SET base_price = ?, max_capacity = ? WHERE id = ?",
+                new BigDecimal("99.99"),
+                100,
+                sectorId
+        );
 
         assignmentService.processParked(event);
 
         var session = parkingSessionRepository.findAll().getFirst();
         assertEquals(1, parkingSessionRepository.count());
         assertEquals(originalParkedAt, session.getParkedAt());
+        assertEquals(originalBasePrice, session.getBasePriceAtParking());
+        assertEquals(originalMultiplier, session.getAppliedMultiplier());
+        assertNull(session.getAmount());
         assertEquals(1L, session.getParkingSpot().getId());
+    }
+
+    @Test
+    void shouldCalculatePricingFromEachSectorOwnOccupancy() {
+        long sectorA = insertSector("A", 4, new BigDecimal("10.00"));
+        long sectorB = insertSector("B", 10, new BigDecimal("20.00"));
+        BigDecimal sectorBLatitude = new BigDecimal("-23.5616850");
+        BigDecimal sectorBLongitude = new BigDecimal("-46.6559820");
+        insertSpot(1L, sectorA, LATITUDE, LONGITUDE);
+        insertSpot(2L, sectorB, sectorBLatitude, sectorBLongitude);
+        entryService.processEntry(entry("ZUL0001", ENTRY_TIME));
+        entryService.processEntry(entry("ZUL0002", ENTRY_TIME));
+
+        assignmentService.processParked(parked("ZUL0001", LATITUDE, LONGITUDE));
+        assignmentService.processParked(parked("ZUL0002", sectorBLatitude, sectorBLongitude));
+
+        assertEquals(new BigDecimal("1.00"), multiplierFor("ZUL0001"));
+        assertEquals(new BigDecimal("0.90"), multiplierFor("ZUL0002"));
+    }
+
+    @Test
+    void shouldPersistMultipliersAtTwentyFiveFiftySeventyFiveAndFullOccupancy() {
+        long sectorId = insertSector("A", 4, BigDecimal.TEN);
+        BigDecimal[] latitudes = {
+                LATITUDE,
+                new BigDecimal("-23.5616850"),
+                new BigDecimal("-23.5616860"),
+                new BigDecimal("-23.5616870")
+        };
+        BigDecimal[] longitudes = {
+                LONGITUDE,
+                new BigDecimal("-46.6559820"),
+                new BigDecimal("-46.6559830"),
+                new BigDecimal("-46.6559840")
+        };
+        for (int index = 0; index < 4; index++) {
+            insertSpot(index + 1L, sectorId, latitudes[index], longitudes[index]);
+            entryService.processEntry(entry("ZUL000" + (index + 1), ENTRY_TIME));
+            assignmentService.processParked(parked(
+                    "ZUL000" + (index + 1),
+                    latitudes[index],
+                    longitudes[index]
+            ));
+        }
+
+        assertEquals(new BigDecimal("1.00"), multiplierFor("ZUL0001"));
+        assertEquals(new BigDecimal("1.00"), multiplierFor("ZUL0002"));
+        assertEquals(new BigDecimal("1.10"), multiplierFor("ZUL0003"));
+        assertEquals(new BigDecimal("1.25"), multiplierFor("ZUL0004"));
     }
 
     @Test
@@ -167,6 +228,47 @@ class ParkingSpotAssignmentServiceIntegrationTest {
     }
 
     @Test
+    void shouldSerializePricingForConcurrentAssignmentsInSameSector() throws Exception {
+        long sectorId = insertSector("A", 5, BigDecimal.TEN);
+        BigDecimal otherLatitude = new BigDecimal("-23.5616850");
+        BigDecimal otherLongitude = new BigDecimal("-46.6559820");
+        insertSpot(1L, sectorId, LATITUDE, LONGITUDE);
+        insertSpot(2L, sectorId, otherLatitude, otherLongitude);
+        entryService.processEntry(entry("ZUL0001", ENTRY_TIME));
+        entryService.processEntry(entry("ZUL0002", ENTRY_TIME));
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            Future<Outcome> first = executor.submit(concurrentParkedAt(
+                    "ZUL0001", LATITUDE, LONGITUDE, ready, start
+            ));
+            Future<Outcome> second = executor.submit(concurrentParkedAt(
+                    "ZUL0002", otherLatitude, otherLongitude, ready, start
+            ));
+
+            assertTrue(ready.await(5, TimeUnit.SECONDS));
+            start.countDown();
+            assertEquals(Outcome.SUCCESS, first.get(10, TimeUnit.SECONDS));
+            assertEquals(Outcome.SUCCESS, second.get(10, TimeUnit.SECONDS));
+
+            List<BigDecimal> multipliers = parkingSessionRepository.findAll().stream()
+                    .map(session -> session.getAppliedMultiplier())
+                    .sorted()
+                    .toList();
+            assertEquals(List.of(new BigDecimal("0.90"), new BigDecimal("1.00")), multipliers);
+            assertEquals(2, parkingSessionRepository.countBySectorIdAndStatus(
+                    sectorId,
+                    ParkingSessionStatus.PARKED
+            ));
+        } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void shouldRollbackSpotAndSessionWhenPersistenceFailsAfterStateChanges() {
         long sectorId = insertSector("A", 10, BigDecimal.TEN);
         insertSpot(1L, sectorId, LATITUDE, LONGITUDE);
@@ -193,6 +295,9 @@ class ParkingSpotAssignmentServiceIntegrationTest {
         assertNull(session.getParkingSpot());
         assertNull(session.getSector());
         assertNull(session.getParkedAt());
+        assertNull(session.getBasePriceAtParking());
+        assertNull(session.getAppliedMultiplier());
+        assertNull(session.getAmount());
         assertEquals(ParkingSpotStatus.AVAILABLE, spot.getStatus());
     }
 
@@ -236,13 +341,23 @@ class ParkingSpotAssignmentServiceIntegrationTest {
     }
 
     private Callable<Outcome> concurrentParked(String plate, CountDownLatch ready, CountDownLatch start) {
+        return concurrentParkedAt(plate, LATITUDE, LONGITUDE, ready, start);
+    }
+
+    private Callable<Outcome> concurrentParkedAt(
+            String plate,
+            BigDecimal latitude,
+            BigDecimal longitude,
+            CountDownLatch ready,
+            CountDownLatch start
+    ) {
         return () -> {
             ready.countDown();
             if (!start.await(5, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("Concurrent PARKED start signal timed out");
             }
             try {
-                assignmentService.processParked(parked(plate, LATITUDE, LONGITUDE));
+                assignmentService.processParked(parked(plate, latitude, longitude));
                 return Outcome.SUCCESS;
             } catch (ParkingSpotOccupiedException exception) {
                 return Outcome.SPOT_OCCUPIED;
@@ -277,6 +392,15 @@ class ParkingSpotAssignmentServiceIntegrationTest {
 
     private ParkedEventRequest parked(String plate, BigDecimal latitude, BigDecimal longitude) {
         return new ParkedEventRequest(plate, latitude, longitude, WebhookEventType.PARKED);
+    }
+
+    private BigDecimal multiplierFor(String plate) {
+        return parkingSessionRepository.findByLicensePlateAndStatusIn(
+                        plate,
+                        List.of(ParkingSessionStatus.ENTERED, ParkingSessionStatus.PARKED)
+                )
+                .orElseThrow()
+                .getAppliedMultiplier();
     }
 
     private enum Outcome {

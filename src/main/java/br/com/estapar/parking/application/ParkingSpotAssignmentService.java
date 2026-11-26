@@ -5,6 +5,7 @@ import br.com.estapar.parking.domain.model.ParkingSession;
 import br.com.estapar.parking.domain.model.ParkingSessionStatus;
 import br.com.estapar.parking.domain.model.ParkingSpot;
 import br.com.estapar.parking.domain.model.Sector;
+import br.com.estapar.parking.domain.service.DynamicPricingPolicy;
 import br.com.estapar.parking.infrastructure.persistence.repository.GarageStateRepository;
 import br.com.estapar.parking.infrastructure.persistence.repository.ParkingSessionRepository;
 import br.com.estapar.parking.infrastructure.persistence.repository.ParkingSpotRepository;
@@ -13,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -29,6 +31,7 @@ public class ParkingSpotAssignmentService {
     private final GarageStateRepository garageStateRepository;
     private final ParkingSessionRepository parkingSessionRepository;
     private final ParkingSpotRepository parkingSpotRepository;
+    private final DynamicPricingPolicy dynamicPricingPolicy;
     private final Clock clock;
 
     public ParkingSpotAssignmentService(
@@ -36,12 +39,14 @@ public class ParkingSpotAssignmentService {
             GarageStateRepository garageStateRepository,
             ParkingSessionRepository parkingSessionRepository,
             ParkingSpotRepository parkingSpotRepository,
+            DynamicPricingPolicy dynamicPricingPolicy,
             Clock clock
     ) {
         this.initializationState = initializationState;
         this.garageStateRepository = garageStateRepository;
         this.parkingSessionRepository = parkingSessionRepository;
         this.parkingSpotRepository = parkingSpotRepository;
+        this.dynamicPricingPolicy = dynamicPricingPolicy;
         this.clock = clock;
     }
 
@@ -100,9 +105,14 @@ public class ParkingSpotAssignmentService {
         if (parkedInSector >= sector.getMaxCapacity()) {
             throw new SectorCapacityExceededException("Parking sector has reached its physical capacity");
         }
+        long occupiedAfterParking = parkedInSector + 1;
+        BigDecimal appliedMultiplier = dynamicPricingPolicy.calculateMultiplier(
+                occupiedAfterParking,
+                sector.getMaxCapacity()
+        );
 
         Instant parkedAt = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
-        session.assignParkingSpot(spot, parkedAt);
+        session.assignParkingSpot(spot, parkedAt, appliedMultiplier);
         spot.occupy();
         parkingSessionRepository.saveAndFlush(session);
         LOGGER.info(

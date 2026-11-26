@@ -97,7 +97,7 @@ Falhas transitórias de conexão e respostas HTTP 5xx recebem um número limitad
 .\mvnw.cmd clean verify
 ```
 
-Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados. A suíte cobre os fluxos `ENTRY` e `PARKED`, reentregas idempotentes, conflitos de estado e vaga, limite de capacidade, rollback e duas transações concorrentes disputando a mesma vaga.
+Os testes de persistência usam um MySQL 8.4 isolado com Testcontainers e nunca apontam para o banco local. O simulador real não é iniciado pelos testes automatizados. A suíte cobre os fluxos `ENTRY` e `PARKED`, reentregas idempotentes, conflitos de estado e vaga, limite de capacidade, rollback, concorrência e as regras de preço dinâmico e tarifa horária.
 
 ## Health check
 
@@ -220,22 +220,47 @@ O evento `PARKED` realiza a transição `ENTERED -> PARKED` em uma única transa
 2. busca a sessão ativa da placa;
 3. localiza a vaga pela igualdade exata de `lat` e `lng` em `DECIMAL(10,7)`;
 4. valida o estado da sessão, a disponibilidade da vaga e a capacidade do setor;
-5. associa vaga e setor à sessão, registra o instante do processamento em UTC e captura o preço-base vigente;
+5. calcula a ocupação do setor após a associação e captura o preço-base e o multiplicador vigentes;
 6. altera a sessão para `PARKED` e a vaga para `OCCUPIED`.
 
 Uma reentrega para a mesma vaga retorna `200` sem alterar `parked_at` nem o preço capturado. A tentativa de mover uma sessão já estacionada para outra vaga recebe `409`. Placa sem sessão ativa, sessão encerrada, vaga ocupada ou setor sem capacidade também recebem `409`; coordenadas desconhecidas recebem `404`.
 
 A máquina de estados permite apenas `ENTERED -> PARKED` nesta etapa. `PARKED -> PARKED` só é aceito como repetição idempotente na mesma vaga; sessões `EXITED` não são reabertas.
 
-A capacidade do setor considera apenas sessões `PARKED`. O evento não volta a consumir capacidade global, pois o veículo já foi contabilizado no `ENTRY`. O campo `base_price_at_parking` é um snapshot de `sector.base_price`; `amount` e `applied_multiplier` permanecem nulos até o cálculo tarifário no `EXIT`.
+A capacidade do setor considera apenas sessões `PARKED`. O evento não volta a consumir capacidade global, pois o veículo já foi contabilizado no `ENTRY`. Os campos `base_price_at_parking` e `applied_multiplier` são congelados no primeiro PARKED; `amount` permanece nulo até o processamento futuro do `EXIT`.
 
 Como o simulador não informa o horário do estacionamento, `parked_at` registra, em UTC, o instante em que o evento foi processado. Esse valor é uma estimativa operacional; o tempo de cobrança continuará baseado em `entry_time` e `exit_time`.
 
 O lock global mantém a mesma ordem de sincronização usada pelo `ENTRY` e pela carga da garagem. As restrições únicas do MySQL para placa e vaga ativas permanecem como proteção adicional contra concorrência.
 
+### Preço dinâmico e tarifa horária
+
+O multiplicador considera somente sessões `PARKED` no setor da vaga. A ocupação usada é a quantidade já persistida mais o veículo atual, contado exatamente uma vez antes da alteração das entidades:
+
+| Ocupação após PARKED | Multiplicador |
+| --- | ---: |
+| menor que 25% | `0.90` |
+| de 25% até 50%, inclusive | `1.00` |
+| acima de 50% até 75%, inclusive | `1.10` |
+| acima de 75% até 100%, inclusive | `1.25` |
+
+Os limites são comparados por aritmética inteira, sem arredondar previamente o percentual. O lock pessimista global serializa PARKED concorrentes, fazendo cada transação observar a ocupação correspondente à sua ordem efetiva. Ocupação de outros setores não participa do cálculo.
+
+O primeiro PARKED captura `sector.base_price` e o multiplicador em `parking_session`. Reentregas idempotentes não recalculam nem alteram preço, multiplicador, `parked_at` ou `amount`, mesmo que o setor seja reconfigurado depois.
+
+O cálculo tarifário disponível para uso futuro segue:
+
+```text
+amount = horas_cobráveis × preço-base-capturado × multiplicador-capturado
+```
+
+Até 30 minutos, inclusive, o valor é `0.00`. Acima dessa tolerância, toda a duração desde a entrada é cobrada e arredondada para cima em blocos de uma hora; por exemplo, 60 minutos e 1 milissegundo resultam em duas horas. Os cálculos usam `Duration` e `BigDecimal`, com `RoundingMode.HALF_UP` e escala monetária de duas casas somente no resultado final.
+
+Sessões legadas podem possuir `applied_multiplier` nulo. Não existe backfill com a ocupação atual, pois isso reconstruiria um preço historicamente incorreto. O futuro processamento de `EXIT` deverá rejeitar ou tratar explicitamente sessões sem dados financeiros completos, sem cobrar valor arbitrário.
+
 ### Limitação temporária
 
-`EXIT` ainda não possui operação de negócio. Eventos válidos desse tipo retornam `503` e não alteram sessões ou vagas.
+Esta etapa não implementa `EXIT`, `GET /revenue`, pagamentos nem novas APIs. `EXIT` continua retornando `503`; o cálculo de tarifa é puro e ainda não grava `amount` ou receita.
 
 A aplicação deve usar `GARAGE_SIMULATOR_URL=http://localhost:3001` para consultar a garagem. A imagem do simulador atualmente tenta entregar o webhook em `localhost:3003` a partir do próprio container e pode não respeitar a variável externa configurada. Em Docker Desktop com rede bridge, isso não aponta automaticamente para o host; consulte os logs do container e não trate falhas de entrega como processamento bem-sucedido.
 

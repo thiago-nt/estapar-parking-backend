@@ -125,14 +125,29 @@ public class ParkingSession extends AuditableEntity {
                 && Objects.equals(this.parkingSpot.getId(), parkingSpot.getId());
     }
 
-    public void assignParkingSpot(ParkingSpot parkingSpot, Instant parkedAt) {
+    public void assignParkingSpot(ParkingSpot parkingSpot, Instant parkedAt, BigDecimal appliedMultiplier) {
         if (status != ParkingSessionStatus.ENTERED) {
             throw new IllegalStateException("Only an entered session can be assigned to a parking spot");
         }
-        this.parkingSpot = Objects.requireNonNull(parkingSpot, "parkingSpot must not be null");
-        this.sector = Objects.requireNonNull(parkingSpot.getSector(), "parkingSpot sector must not be null");
-        this.parkedAt = Objects.requireNonNull(parkedAt, "parkedAt must not be null");
+        ParkingSpot assignedSpot = Objects.requireNonNull(parkingSpot, "parkingSpot must not be null");
+        Sector assignedSector = Objects.requireNonNull(
+                assignedSpot.getSector(),
+                "parkingSpot sector must not be null"
+        );
+        Instant assignmentTime = Objects.requireNonNull(parkedAt, "parkedAt must not be null");
+        BigDecimal pricingMultiplier = Objects.requireNonNull(
+                appliedMultiplier,
+                "appliedMultiplier must not be null"
+        );
+        if (pricingMultiplier.signum() <= 0) {
+            throw new IllegalArgumentException("appliedMultiplier must be greater than zero");
+        }
+
+        this.parkingSpot = assignedSpot;
+        this.sector = assignedSector;
+        this.parkedAt = assignmentTime;
         this.basePriceAtParking = sector.getBasePrice();
+        this.appliedMultiplier = pricingMultiplier;
         this.status = ParkingSessionStatus.PARKED;
     }
 }
